@@ -35,7 +35,7 @@ export function MetricsSidebar({
         <MetricRow label="Prompt Tokens" value={metrics.promptTokens} />
         <MetricRow label="Completion Tokens" value={metrics.completionTokens} />
         <MetricRow label="Total Tokens" value={metrics.totalTokens} />
-        <MetricRow label="Model" value={metrics.model} />
+        <MetricRow label="Model" value={metrics.model || '-'} />
       </div>
 
       <Button

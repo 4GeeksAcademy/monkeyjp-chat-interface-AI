@@ -8,37 +8,23 @@ import { ChatMessage, type Message } from '@/components/chat-message'
 import { ThinkingIndicator } from '@/components/thinking-indicator'
 import { MetricsSidebar } from '@/components/metrics-sidebar'
 
-const INITIAL_MESSAGES: Message[] = [
-  {
-    id: '1',
-    role: 'assistant',
-    content: 'Hola, soy tu asistente de IA. ¿En qué puedo ayudarte hoy?',
-  },
-  {
-    id: '2',
-    role: 'user',
-    content: '¿Puedes darme una idea para un proyecto?',
-  },
-  {
-    id: '3',
-    role: 'assistant',
-    content:
-      'Claro. Podrías construir un panel de análisis en tiempo real que visualice datos de una API pública. Es un buen equilibrio entre frontend y manejo de datos.',
-  },
-]
+
 
 const EMPTY_METRICS = {
   promptTokens: 0,
   completionTokens: 0,
   totalTokens: 0,
-  model: 'gpt-4o-mini',
+  model: '',
 }
 
 export function ChatInterface() {
-  const [messages, setMessages] = useState<Message[]>(INITIAL_MESSAGES)
+  const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [isThinking, setIsThinking] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const [metrics, setMetrics] = useState(EMPTY_METRICS)
+  const [hydrated, setHydrated] = useState(false)
+  const [error, setError] = useState('')
 
   useEffect(() => {
     scrollRef.current?.scrollTo({
@@ -47,20 +33,113 @@ export function ChatInterface() {
     })
   }, [messages, isThinking])
 
-  function handleSubmit(e: React.FormEvent) {
+  useEffect(() => {
+    const storedMessages = localStorage.getItem('chatMessages')
+    const storedMetrics = localStorage.getItem('chatMetrics')
+
+    try {
+      if (storedMessages) {
+        setMessages(JSON.parse(storedMessages))
+      }
+
+      if (storedMetrics) {
+        setMetrics(JSON.parse(storedMetrics))
+      }
+    } catch (error) {
+      console.error('Error al recuperar la sesión:', error)
+
+      localStorage.removeItem('chatMessages')
+      localStorage.removeItem('chatMetrics')
+    }
+
+    setHydrated(true)
+  }, [])
+
+  useEffect(() => {
+    if (!hydrated) return
+
+    localStorage.setItem('chatMessages', JSON.stringify(messages))
+  }, [messages, hydrated])
+
+  useEffect(() => {
+    if (!hydrated) return
+
+    localStorage.setItem('chatMetrics', JSON.stringify(metrics))
+  }, [metrics, hydrated])
+
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+
     const text = input.trim()
+    
     if (!text || isThinking) return
+    
+    setError('')
+    
+    const userMessage: Message = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: text,
+    }
 
-    setMessages((prev) => [
-      ...prev,
-      { id: crypto.randomUUID(), role: 'user', content: text },
-    ])
+    const conversation = [...messages, userMessage]
+
+    setMessages(conversation)
     setInput('')
-
-    // Solo demostración visual del estado "Pensando..."
     setIsThinking(true)
-    window.setTimeout(() => setIsThinking(false), 1600)
+
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messages: conversation.map(({ role, content }) => ({
+            role,
+            content,
+          })),
+        }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Error al comunicarse con la IA')
+      }
+
+      const cleanContent = data.choices[0].message.content
+        .replace(/<think>[\s\S]*?<\/think>/g, '')
+        .replace(/<think>[\s\S]*$/g, '')
+        .trim()
+
+      const assistantMessage: Message = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: cleanContent,
+      }
+
+      setMessages((prev) => [...prev, assistantMessage])
+
+      setMetrics((prev) => ({
+        promptTokens:
+          prev.promptTokens + (data.usage?.prompt_tokens ?? 0),
+        completionTokens:
+          prev.completionTokens + (data.usage?.completion_tokens ?? 0),
+        totalTokens:
+          prev.totalTokens + (data.usage?.total_tokens ?? 0),
+        model: data.model ?? prev.model,
+      }))
+    } catch (error) {
+      console.error(error)
+      setError(
+        error instanceof Error
+          ? error.message
+          : 'Ha ocurrido un error inesperado'
+      )
+    } finally {
+      setIsThinking(false)
+    }
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -73,11 +152,16 @@ export function ChatInterface() {
   function handleClear() {
     setMessages([])
     setIsThinking(false)
+    setMetrics(EMPTY_METRICS)
+    setError('')
+
+    localStorage.removeItem('chatMessages')
+    localStorage.removeItem('chatMetrics')
   }
 
   return (
     <div className="flex h-dvh flex-col-reverse bg-background md:flex-row">
-      <MetricsSidebar metrics={EMPTY_METRICS} onClear={handleClear} />
+      <MetricsSidebar metrics={metrics} onClear={handleClear} />
 
       <main className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center gap-2 border-b border-border px-4 py-3">
@@ -107,6 +191,14 @@ export function ChatInterface() {
             {isThinking && <ThinkingIndicator />}
           </div>
         </div>
+
+        {error && (
+          <div className="mx-auto w-full max-w-2xl px-4 pb-3">
+            <div className="rounded-lg bg-destructive/10 px-4 py-3 text-sm text-destructive">
+              {error}
+            </div>
+          </div>
+        )}
 
         <form
           onSubmit={handleSubmit}
